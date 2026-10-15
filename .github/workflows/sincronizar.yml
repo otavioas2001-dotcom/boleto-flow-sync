@@ -1,0 +1,70 @@
+name: Sincronizar boletos
+
+on:
+  schedule:
+    # 09:00 horário de Brasília (UTC-3, sem horário de verão desde 2019)
+    - cron: '0 12 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  sync-otavio:
+    name: Sincronizar (Otávio / Boleto Flow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: sync-otavio
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Instalar Chromium (Playwright)
+        run: npx playwright install --with-deps chromium
+
+      - name: Configurar ambiente
+        run: |
+          cat <<EOF > .env
+          PORTFOLIO_URL=${{ secrets.OTAVIO_PORTFOLIO_URL }}
+          INGEST_URL=${{ secrets.OTAVIO_INGEST_URL }}
+          INGEST_TOKEN=${{ secrets.OTAVIO_INGEST_TOKEN }}
+          EOF
+
+      - name: Rodar sincronização
+        run: node servidor/sincronizar.js
+
+  sync-joao:
+    name: Sincronizar (João / parceiro)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: sync-joao
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Instalar Chromium (Playwright)
+        run: npx playwright install --with-deps chromium
+
+      - name: Configurar ambiente
+        run: |
+          cat <<EOF > .env.joao
+          PORTFOLIO_URL=${{ secrets.JOAO_PORTFOLIO_URL }}
+          INGEST_URL=${{ secrets.JOAO_INGEST_URL }}
+          INGEST_TOKEN=${{ secrets.JOAO_INGEST_TOKEN }}
+          EOF
+
+      - name: Rodar sincronização
+        run: node servidor/sincronizar.js .env.joao

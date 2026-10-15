@@ -111,6 +111,7 @@ async function enviarParaIngest({ env, targetType, targetId, faturas }) {
       dueDate: f.due_date,
       amountCents: f.amount_cents,
       barcode: f.barcode || undefined,
+      category: f.category || undefined,
       pdfBase64: f.pdfBuffer ? f.pdfBuffer.toString('base64') : undefined,
     })),
   };

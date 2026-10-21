@@ -149,18 +149,87 @@ async function dispararLembretes(env) {
   }
 }
 
+// Traduz o erro cru do scraper pro codigo de motivo que a aba Historico →
+// Verificacoes do Boleto Flow sabe explicar pro cliente (src/lib/sync-reasons.ts).
+function classificarErro(erro) {
+  const msg = String(erro || '');
+  if (/error status for invoice listing/i.test(msg)) return 'portal_nao_encontrou';
+  if (msg === 'cnpj_invalido_e_sem_senha_legado') return 'falta_senha_portal_antigo';
+  if (msg === 'faltam_credenciais') return 'faltam_dados_acesso';
+  if (msg === 'login_falhou') return 'login_recusado';
+  if (msg === 'api_nao_capturada' || /timeout|net::|navigation|reading 'fill'|Target (page|closed)/i.test(msg)) return 'portal_instavel';
+  return 'nao_verificado';
+}
+
+// POST /api/public/report-sync: 1 relatorio por rodada, com os totais e so as
+// pendencias (o que deu certo ja aparece nas faturas, nao precisa listar).
+async function enviarRelatorio(env, relatorio, fatalError) {
+  if (!env.INGEST_URL || !env.INGEST_TOKEN) return { enviado: false, motivo: 'INGEST_URL/INGEST_TOKEN nao configurados' };
+  const baseUrl = env.INGEST_URL.replace(/\/api\/public\/.*$/, '');
+  const todos = [...relatorio.empresas, ...relatorio.clientes];
+  const payload = {
+    startedAt: relatorio.iniciadoEm,
+    finishedAt: new Date().toISOString(),
+    fatalError: fatalError || null,
+    totals: {
+      companiesChecked: relatorio.empresas.length,
+      clientsChecked: relatorio.clientes.length,
+      ok: todos.filter(r => r.ok).length,
+      newInvoices: todos.reduce((soma, r) => soma + (r.envio?.resultado?.newInvoices || 0), 0),
+    },
+    items: todos.filter(r => !r.ok).map(r => ({
+      targetType: r.targetType,
+      targetId: r.targetId || null,
+      reasonCode: r.motivo,
+      detail: String(r.erro || '').slice(0, 5000),
+    })),
+  };
+  try {
+    const resp = await fetch(`${baseUrl}/api/public/report-sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-ingest-token': env.INGEST_TOKEN },
+      body: JSON.stringify(payload),
+    });
+    const corpo = await resp.json().catch(() => null);
+    return { enviado: resp.ok, http: resp.status, resultado: corpo };
+  } catch (e) {
+    return { enviado: false, motivo: e.message };
+  }
+}
+
+// Registra o resultado de 1 empresa/cliente no relatorio. Erro do portal ou
+// falha ao gravar no ingest viram pendencia (ok: false) com codigo de motivo.
+function registrar(lista, base, { erro, faturas, envio }) {
+  if (erro) {
+    lista.push({ ...base, ok: false, erro, motivo: classificarErro(erro) });
+  } else if (envio && !envio.enviado && base.targetId) {
+    lista.push({ ...base, ok: false, faturas, envio, erro: envio.motivo, motivo: 'erro_ao_salvar' });
+  } else {
+    lista.push({ ...base, ok: true, faturas, envio });
+  }
+}
+
 async function sincronizarTudo(nomeArquivoEnv) {
   const env = carregarEnv(nomeArquivoEnv);
-  const carteira = await carregarCarteira(env);
   const relatorio = { empresas: [], clientes: [], iniciadoEm: new Date().toISOString() };
+
+  let carteira;
+  try {
+    carteira = await carregarCarteira(env);
+  } catch (e) {
+    // Sem carteira nao da pra verificar ninguem — avisa o painel que a rodada falhou inteira.
+    relatorio.relatorioPainel = await enviarRelatorio(env, relatorio, e.message);
+    throw e;
+  }
 
   for (const empresa of carteira.empresas || []) {
     console.log(`[PJ] verificando ${empresa.codigo}...`);
+    const base = { codigo: empresa.codigo, targetType: 'company', targetId: empresa.dashboardId };
     try {
       const resultado = await buscarFaturasEmpresa(empresa);
       if (!resultado.ok) {
         console.log(`[PJ] ${empresa.codigo}: erro — ${resultado.erro}`);
-        relatorio.empresas.push({ codigo: empresa.codigo, ok: false, erro: resultado.erro });
+        registrar(relatorio.empresas, base, { erro: resultado.erro });
         continue;
       }
       console.log(`[PJ] ${empresa.codigo}: ${resultado.faturas.length} fatura(s)`);
@@ -170,20 +239,21 @@ async function sincronizarTudo(nomeArquivoEnv) {
         targetId: empresa.dashboardId,
         faturas: resultado.faturas,
       });
-      relatorio.empresas.push({ codigo: empresa.codigo, ok: true, faturas: resultado.faturas.length, envio });
+      registrar(relatorio.empresas, base, { faturas: resultado.faturas.length, envio });
     } catch (e) {
       console.log(`[PJ] ${empresa.codigo}: excecao — ${e.message}`);
-      relatorio.empresas.push({ codigo: empresa.codigo, ok: false, erro: e.message });
+      registrar(relatorio.empresas, base, { erro: e.message });
     }
   }
 
   for (const cliente of carteira.clientes || []) {
     console.log(`[PF] verificando ${cliente.cpf}...`);
+    const base = { cpf: cliente.cpf, targetType: 'client', targetId: cliente.dashboardId };
     try {
       const resultado = await buscarFaturasPF(cliente);
       if (!resultado.ok) {
         console.log(`[PF] ${cliente.cpf}: erro — ${resultado.erro}`);
-        relatorio.clientes.push({ cpf: cliente.cpf, ok: false, erro: resultado.erro });
+        registrar(relatorio.clientes, base, { erro: resultado.erro });
         continue;
       }
       console.log(`[PF] ${cliente.cpf}: ${resultado.faturas.length} fatura(s)`);
@@ -193,16 +263,20 @@ async function sincronizarTudo(nomeArquivoEnv) {
         targetId: cliente.dashboardId,
         faturas: resultado.faturas,
       });
-      relatorio.clientes.push({ cpf: cliente.cpf, ok: true, faturas: resultado.faturas.length, envio });
+      registrar(relatorio.clientes, base, { faturas: resultado.faturas.length, envio });
     } catch (e) {
       console.log(`[PF] ${cliente.cpf}: excecao — ${e.message}`);
-      relatorio.clientes.push({ cpf: cliente.cpf, ok: false, erro: e.message });
+      registrar(relatorio.clientes, base, { erro: e.message });
     }
   }
 
   console.log('\nDisparando lembretes de pagamento...');
   relatorio.lembretes = await dispararLembretes(env);
   console.log('Lembretes:', JSON.stringify(relatorio.lembretes));
+
+  console.log('\nEnviando relatorio da verificacao pro painel...');
+  relatorio.relatorioPainel = await enviarRelatorio(env, relatorio);
+  console.log('Relatorio:', JSON.stringify(relatorio.relatorioPainel));
 
   relatorio.finalizadoEm = new Date().toISOString();
   return relatorio;

@@ -57,7 +57,10 @@ async function carregarCarteiraRemota(env) {
   }
   const dados = await resp.json();
 
-  const empresas = (dados.companies || []).map(c => ({
+  // accessType 'none' = capital + CAEPF: nao existe portal de boleto pra elas, o
+  // Boleto Flow so manda lembrete recorrente pelo dia do vencimento. Tentar o portal
+  // so gerava pendencia falsa ("precisa de senha") na aba Verificacoes.
+  const empresas = (dados.companies || []).filter(c => c.accessType !== 'none').map(c => ({
     dashboardId: c.id,
     codigo: c.companyCode,
     cnpj: c.document || undefined,

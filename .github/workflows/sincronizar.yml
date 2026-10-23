@@ -41,7 +41,7 @@ jobs:
   sync-joao:
     name: Sincronizar (João / parceiro)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     concurrency:
       group: sync-joao
       cancel-in-progress: false

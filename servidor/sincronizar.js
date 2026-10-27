@@ -48,14 +48,30 @@ function carregarEnv(nomeArquivo) {
 // que devolve empresas/clientes com id (uuid) do banco e a senha ja descriptografada.
 // Sem PORTFOLIO_URL configurada, cai pro carteira.json local (so serve pra teste manual —
 // sem id do dashboard nao da pra mandar o resultado pro ingest-invoices).
-async function carregarCarteiraRemota(env) {
-  const resp = await fetch(env.PORTFOLIO_URL, {
-    headers: { 'x-ingest-token': env.INGEST_TOKEN },
-  });
-  if (!resp.ok) {
-    throw new Error(`Falha ao buscar carteira remota: HTTP ${resp.status}: ${await resp.text().catch(() => '')}`);
+// Em 24/10 (HTTP 401 — o endpoint responde 401 tambem quando a consulta do token
+// falha no banco) e 25/10 (fetch failed) o servidor oscilou bem na hora e a rodada
+// do Joao inteira se perdeu. Tenta 4 vezes, com 2 min entre as tentativas.
+async function buscarCarteiraComRetentativa(env, tentativas = 4, esperaMs = 120000) {
+  let ultimoErro;
+  for (let i = 1; i <= tentativas; i++) {
+    try {
+      const resp = await fetch(env.PORTFOLIO_URL, {
+        headers: { 'x-ingest-token': env.INGEST_TOKEN },
+        signal: AbortSignal.timeout(120000),
+      });
+      if (resp.ok) return await resp.json();
+      ultimoErro = new Error(`Falha ao buscar carteira remota: HTTP ${resp.status}: ${await resp.text().catch(() => '')}`);
+    } catch (e) {
+      ultimoErro = new Error(`Falha ao buscar carteira remota: ${e.message}`);
+    }
+    console.log(`[carteira] tentativa ${i}/${tentativas} falhou — ${ultimoErro.message}`);
+    if (i < tentativas) await new Promise(r => setTimeout(r, esperaMs));
   }
-  const dados = await resp.json();
+  throw ultimoErro;
+}
+
+async function carregarCarteiraRemota(env) {
+  const dados = await buscarCarteiraComRetentativa(env);
 
   // accessType 'none' = capital + CAEPF: nao existe portal de boleto pra elas, o
   // Boleto Flow so manda lembrete recorrente pelo dia do vencimento. Tentar o portal

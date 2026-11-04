@@ -1,5 +1,8 @@
 name: Sincronizar boletos
 
+# Endereco publicado do app (Lovable). Se o nome publicado mudar de novo, trocar aqui
+# nas 4 linhas PORTFOLIO_URL/INGEST_URL — antes era boleto-flow-albino-dias.lovable.app.
+
 on:
   schedule:
     # 09:00 horário de Brasília (UTC-3, sem horário de verão desde 2019)
@@ -30,8 +33,8 @@ jobs:
       - name: Configurar ambiente
         run: |
           cat <<EOF > .env
-          PORTFOLIO_URL=${{ secrets.OTAVIO_PORTFOLIO_URL }}
-          INGEST_URL=${{ secrets.OTAVIO_INGEST_URL }}
+          PORTFOLIO_URL=https://venceracobrancas.lovable.app/api/public/portfolio
+          INGEST_URL=https://venceracobrancas.lovable.app/api/public/ingest-invoices
           INGEST_TOKEN=${{ secrets.OTAVIO_INGEST_TOKEN }}
           EOF
 
@@ -61,8 +64,8 @@ jobs:
       - name: Configurar ambiente
         run: |
           cat <<EOF > .env.joao
-          PORTFOLIO_URL=${{ secrets.JOAO_PORTFOLIO_URL }}
-          INGEST_URL=${{ secrets.JOAO_INGEST_URL }}
+          PORTFOLIO_URL=https://venceracobrancas.lovable.app/api/public/portfolio
+          INGEST_URL=https://venceracobrancas.lovable.app/api/public/ingest-invoices
           INGEST_TOKEN=${{ secrets.JOAO_INGEST_TOKEN }}
           EOF
 

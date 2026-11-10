@@ -14,6 +14,8 @@ jobs:
     name: Sincronizar (Otávio / Boleto Flow)
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    outputs:
+      motivo: ${{ steps.sync.outputs.motivo }}
     concurrency:
       group: sync-otavio
       cancel-in-progress: false
@@ -39,12 +41,15 @@ jobs:
           EOF
 
       - name: Rodar sincronização
+        id: sync
         run: node servidor/sincronizar.js
 
   sync-joao:
     name: Sincronizar (João / parceiro)
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    outputs:
+      motivo: ${{ steps.sync.outputs.motivo }}
     concurrency:
       group: sync-joao
       cancel-in-progress: false
@@ -70,4 +75,40 @@ jobs:
           EOF
 
       - name: Rodar sincronização
+        id: sync
         run: node servidor/sincronizar.js .env.joao
+
+  # Se qualquer rodada falhar (erro, rodada estranha ou tempo limite), avisa por e-mail.
+  avisar:
+    name: Avisar por e-mail se deu problema
+    needs: [sync-otavio, sync-joao]
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar alerta (Resend)
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RES_OTAVIO: ${{ needs.sync-otavio.result }}
+          RES_JOAO: ${{ needs.sync-joao.result }}
+          MOTIVO_OTAVIO: ${{ needs.sync-otavio.outputs.motivo }}
+          MOTIVO_JOAO: ${{ needs.sync-joao.outputs.motivo }}
+          LINK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          linha() {
+            case "$2" in
+              success) echo "<li><b>$1:</b> rodou certo</li>" ;;
+              cancelled) echo "<li><b>$1:</b> passou do tempo limite ou foi cancelada</li>" ;;
+              *) echo "<li><b>$1:</b> falhou — ${3:-erro inesperado, ver o log}</li>" ;;
+            esac
+          }
+          HTML="<p>A verificação diária de boletos teve problema.</p><ul>$(linha 'Carteira Otávio' "$RES_OTAVIO" "$MOTIVO_OTAVIO")$(linha 'Carteira João' "$RES_JOAO" "$MOTIVO_JOAO")</ul><p><a href=\"$LINK\">Abrir o log da rodada</a></p>"
+          jq -n --arg html "$HTML" '{
+            from: "Robô de boletos <alertas@mail.planohap.com.br>",
+            to: ["otavioas2001@gmail.com", "jvaguetonila@outlook.com"],
+            subject: "Robô de boletos: problema na verificação de hoje",
+            html: $html
+          }' > email.json
+          curl -sS --fail-with-body -X POST https://api.resend.com/emails \
+            -H "Authorization: Bearer $RESEND_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @email.json

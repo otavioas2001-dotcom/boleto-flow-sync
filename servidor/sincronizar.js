@@ -301,15 +301,49 @@ async function sincronizarTudo(nomeArquivoEnv) {
   return relatorio;
 }
 
+// Rodada que "termina" mas veio estranha tambem tem que avisar: lembretes que
+// nao sairam, painel sem relatorio, carteira vazia ou muita falha de uma vez.
+const LIMITE_FALHAS = 0.2;
+
+function problemasDaRodada(relatorio) {
+  const problemas = [];
+  const todos = [...relatorio.empresas, ...relatorio.clientes];
+  const falhas = todos.filter(r => !r.ok).length;
+  if (todos.length === 0) problemas.push('a carteira veio vazia (nenhuma empresa ou cliente pra verificar)');
+  if (todos.length >= 10 && falhas / todos.length > LIMITE_FALHAS) {
+    problemas.push(`${falhas} de ${todos.length} verificacoes falharam (acima de ${LIMITE_FALHAS * 100}%)`);
+  }
+  if (!relatorio.lembretes?.enviado) {
+    problemas.push(`os lembretes de pagamento nao foram disparados (${relatorio.lembretes?.http || relatorio.lembretes?.motivo || 'sem resposta'})`);
+  }
+  if (!relatorio.relatorioPainel?.enviado) {
+    problemas.push(`o relatorio nao chegou no painel (${relatorio.relatorioPainel?.http || relatorio.relatorioPainel?.motivo || 'sem resposta'})`);
+  }
+  return problemas;
+}
+
+// No GitHub Actions, o motivo vira output do job e entra no e-mail de alerta.
+function registrarMotivoNoActions(motivo) {
+  if (!process.env.GITHUB_OUTPUT) return;
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `motivo=${motivo.replace(/\r?\n/g, ' ')}\n`);
+}
+
 if (require.main === module) {
   const nomeArquivoEnv = process.argv[2];
   sincronizarTudo(nomeArquivoEnv)
     .then(relatorio => {
       console.log('\n--- Relatorio ---');
       console.log(JSON.stringify(relatorio, null, 2));
+      const problemas = problemasDaRodada(relatorio);
+      if (problemas.length) {
+        console.error('\nRodada com problema:\n- ' + problemas.join('\n- '));
+        registrarMotivoNoActions(problemas.join('; '));
+        process.exit(1);
+      }
     })
     .catch(e => {
       console.error('Falha na sincronizacao:', e);
+      registrarMotivoNoActions(`a rodada parou no meio: ${e.message}`);
       process.exit(1);
     });
 }
